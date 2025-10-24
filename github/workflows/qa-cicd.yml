@@ -1,0 +1,284 @@
+name: CI-CD QA
+
+on:
+  push:
+    branches: [ "qa" ]
+  workflow_dispatch:
+
+env:
+  PHP_VERSION: "8.3"
+  NODE_VERSION: "20"
+
+jobs:
+  meta:
+    name: Prep (DEPLOY_ID)
+    runs-on: ubuntu-latest
+    outputs:
+      deploy_id: ${{ steps.mkid.outputs.DEPLOY_ID }}
+    steps:
+      - id: mkid
+        run: |
+          ID="$(date -u +%Y%m%d%H%M%S)-${GITHUB_RUN_NUMBER}-$(echo $GITHUB_SHA | cut -c1-7)"
+          echo "DEPLOY_ID=$ID" >> $GITHUB_OUTPUT
+          echo "### Deploy ID" >> $GITHUB_STEP_SUMMARY
+          echo "$ID" >> $GITHUB_STEP_SUMMARY
+
+  test:
+    name: Tests (PHPUnit)
+    runs-on: ubuntu-latest
+    needs: meta
+    env:
+      DEPLOY_ID: ${{ needs.meta.outputs.deploy_id }}
+
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: testing
+        ports: [ "3306:3306" ]
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -proot"
+          --health-interval=10s --health-timeout=5s --health-retries=5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ env.PHP_VERSION }}
+          coverage: none
+          extensions: mbstring, intl, bcmath, mysql, zip, dom, curl, pcntl
+          ini-values: post_max_size=64M, upload_max_filesize=32M, memory_limit=512M
+
+      - name: Install Composer deps (dev)
+        run: composer install --no-interaction
+
+      - name: Prepare .env.testing
+        run: |
+          cp .env.example .env.testing
+          php -r "file_put_contents('.env.testing', preg_replace('/^APP_ENV=.*/m','APP_ENV=testing', file_get_contents('.env.testing')));"
+          php -r "file_put_contents('.env.testing', preg_replace('/^DB_CONNECTION=.*/m','DB_CONNECTION=mysql', file_get_contents('.env.testing')));"
+          php -r "file_put_contents('.env.testing', preg_replace('/^DB_HOST=.*/m','DB_HOST=127.0.0.1', file_get_contents('.env.testing')));"
+          php -r "file_put_contents('.env.testing', preg_replace('/^DB_PORT=.*/m','DB_PORT=3306', file_get_contents('.env.testing')));"
+          php -r "file_put_contents('.env.testing', preg_replace('/^DB_DATABASE=.*/m','DB_DATABASE=testing', file_get_contents('.env.testing')));"
+          php -r "file_put_contents('.env.testing', preg_replace('/^DB_USERNAME=.*/m','DB_USERNAME=root', file_get_contents('.env.testing')));"
+          php -r "file_put_contents('.env.testing', preg_replace('/^DB_PASSWORD=.*/m','DB_PASSWORD=root', file_get_contents('.env.testing')));"
+          cp .env.testing .env
+          php artisan key:generate --env=testing --ansi
+
+      - name: Run PHPUnit (JUnit)
+        run: php artisan test --env=testing --log-junit phpunit-junit_${{ env.DEPLOY_ID }}.xml
+
+      - name: Upload JUnit artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: phpunit-junit_${{ env.DEPLOY_ID }}
+          path: phpunit-junit_${{ env.DEPLOY_ID }}.xml
+
+      - name: Job Summary
+        if: always()
+        run: |
+          echo "### PHPUnit (${DEPLOY_ID})" >> $GITHUB_STEP_SUMMARY
+          FILE="phpunit-junit_${DEPLOY_ID}.xml"
+          if [ -f "$FILE" ]; then
+            PASS=$(grep -oP 'tests="\K[0-9]+' "$FILE" | head -1)
+            FAIL=$(grep -oP 'failures="\K[0-9]+' "$FILE" | head -1)
+            ERR=$(grep -oP 'errors="\K[0-9]+' "$FILE" | head -1)
+            SKIP=$(grep -oP 'skipped="\K[0-9]+' "$FILE" | head -1)
+            echo "- Tests: ${PASS}" >> $GITHUB_STEP_SUMMARY
+            echo "- Failures: ${FAIL}" >> $GITHUB_STEP_SUMMARY
+            echo "- Errors: ${ERR}" >> $GITHUB_STEP_SUMMARY
+            echo "- Skipped: ${SKIP}" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- No JUnit file generated" >> $GITHUB_STEP_SUMMARY
+          fi
+
+  scan:
+    name: Security Scan (Trivy + SARIF)
+    runs-on: ubuntu-latest
+    needs: test
+    env:
+      DEPLOY_ID: ${{ needs.meta.outputs.deploy_id }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Trivy FS (CRITICAL,HIGH) → fail on findings
+        id: trivy
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          scan-type: fs
+          ignore-unfixed: true
+          severity: CRITICAL,HIGH
+          hide-progress: true
+          scanners: vuln,secret
+          format: sarif
+          output: trivy-results_${{ env.DEPLOY_ID }}.sarif
+          exit-code: '1'
+
+      - name: Upload SARIF to Code Scanning
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-results_${{ env.DEPLOY_ID }}.sarif
+
+      - name: Upload Trivy artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-report_${{ env.DEPLOY_ID }}
+          path: trivy-results_${{ env.DEPLOY_ID }}.sarif
+
+      - name: Job Summary
+        if: always()
+        run: |
+          echo "### Trivy (${DEPLOY_ID})" >> $GITHUB_STEP_SUMMARY
+          if command -v jq >/dev/null 2>&1; then
+            issues=$(jq '.runs[].results | length' trivy-results_${DEPLOY_ID}.sarif | paste -sd+ - | bc)
+            echo "- Hallazgos: ${issues}" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- SARIF generado" >> $GITHUB_STEP_SUMMARY
+          fi
+
+  build:
+    name: Build (Composer+Vite)
+    runs-on: ubuntu-latest
+    needs: [ scan ]
+    env:
+      DEPLOY_ID: ${{ needs.meta.outputs.deploy_id }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ env.PHP_VERSION }}
+          coverage: none
+          extensions: mbstring, intl, bcmath, mysql, zip, dom, curl, pcntl
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Composer install (prod)
+        run: composer install --no-dev --prefer-dist --optimize-autoloader --no-interaction
+
+      - name: Node build (Vite)
+        run: |
+          npm ci
+          npm run build
+
+      - name: Construir .env desde secrets (QA)
+        run: |
+          cp .env.example .env
+          sed -i "s|^APP_ENV=.*|APP_ENV=production|g" .env
+          sed -i "s|^APP_DEBUG=.*|APP_DEBUG=false|g" .env
+          sed -i "s|^APP_URL=.*|APP_URL=${{ secrets.QA_APP_URL }}|g" .env
+          sed -i "s|^DB_CONNECTION=.*|DB_CONNECTION=${{ secrets.QA_DB_CONNECTION }}|g" .env
+          sed -i "s|^DB_HOST=.*|DB_HOST=${{ secrets.QA_DB_HOST }}|g" .env
+          sed -i "s|^DB_PORT=.*|DB_PORT=${{ secrets.QA_DB_PORT }}|g" .env
+          sed -i "s|^DB_DATABASE=.*|DB_DATABASE=${{ secrets.QA_DB_DATABASE }}|g" .env
+          sed -i "s|^DB_USERNAME=.*|DB_USERNAME=${{ secrets.QA_DB_USERNAME }}|g" .env
+          sed -i "s|^DB_PASSWORD=.*|DB_PASSWORD=${{ secrets.QA_DB_PASSWORD }}|g" .env
+          php artisan key:generate --force --ansi
+
+      - name: Cacheos de framework
+        run: |
+          php artisan config:cache
+          php artisan route:cache
+          php artisan view:cache
+
+      - name: Empaquetar artifact con ID único
+        run: |
+          tar -czf build_qa_${DEPLOY_ID}.tar.gz \
+            --exclude='.git' \
+            --exclude='node_modules' \
+            --exclude='.github' \
+            --exclude='tests' \
+            .
+
+      - name: Subir artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: build_qa_${{ env.DEPLOY_ID }}
+          path: build_qa_${{ env.DEPLOY_ID }}.tar.gz
+
+      - name: Job Summary
+        run: |
+          echo "### Build (${DEPLOY_ID})" >> $GITHUB_STEP_SUMMARY
+          echo "- Artifact: build_qa_${DEPLOY_ID}.tar.gz" >> $GITHUB_STEP_SUMMARY
+
+  deploy:
+    name: Deploy to QA
+    runs-on: ubuntu-latest
+    needs: build
+    env:
+      DEPLOY_ID: ${{ needs.meta.outputs.deploy_id }}
+    steps:
+      - name: Descargar artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: build_qa_${{ env.DEPLOY_ID }}
+          path: .
+
+      - name: SCP artifact
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.QA_HOST }}
+          username: ${{ secrets.QA_SSH_USER }}
+          password: ${{ secrets.QA_SSH_PASSWORD }}
+          source: "build_qa_${{ env.DEPLOY_ID }}.tar.gz"
+          target: "/tmp"
+
+      - name: SSH deploy (releases, symlink, keep last 3)
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.QA_HOST }}
+          username: ${{ secrets.QA_SSH_USER }}
+          password: ${{ secrets.QA_SSH_PASSWORD }}
+          script: |
+            set -e
+            BASE="/var/www/laravel-app"
+            CURRENT="${BASE}/current"
+            RELEASES="${BASE}/releases"
+            RELEASE="${RELEASES}/${DEPLOY_ID}"
+
+            # Prep directorios
+            sudo mkdir -p "$RELEASES"
+            mkdir -p "$RELEASE"
+            tar -xzf "/tmp/build_qa_${DEPLOY_ID}.tar.gz" -C "$RELEASE"
+
+            # Permisos
+            sudo chown -R $USER:www-data "$RELEASE"
+            sudo find "$RELEASE/storage" -type d -exec chmod 775 {} \; 2>/dev/null || true
+            sudo find "$RELEASE/bootstrap/cache" -type d -exec chmod 775 {} \; 2>/dev/null || true
+
+            # Activar release con symlink atomico
+            ln -sfn "$RELEASE" "$CURRENT"
+            sudo chown -h $USER:www-data "$CURRENT"
+
+            # Migraciones y caches sobre la versión activa
+            cd "$CURRENT"
+            php artisan migrate --force || true
+            php artisan config:cache
+            php artisan route:cache
+            php artisan view:cache
+
+            # Mantener solo los últimos 3 releases y eliminar el resto
+            KEEP=3
+            COUNT=$(ls -1dt ${RELEASES}/* 2>/dev/null | wc -l || true)
+            if [ "$COUNT" -gt "$KEEP" ]; then
+              TO_DELETE=$(ls -1dt ${RELEASES}/* | tail -n +$((KEEP+1)) )
+              echo "$TO_DELETE" | xargs -r rm -rf --
+            fi
+
+            # Limpieza de temporales
+            rm -f "/tmp/build_qa_${DEPLOY_ID}.tar.gz"
+
+      - name: Job Summary
+        run: |
+          echo "### Deploy (${DEPLOY_ID})" >> $GITHUB_STEP_SUMMARY
+          echo "- Release path: /var/www/laravel-app/releases/${DEPLOY_ID}" >> $GITHUB_STEP_SUMMARY
+          echo "- Symlink: /var/www/laravel-app/current" >> $GITHUB_STEP_SUMMARY
