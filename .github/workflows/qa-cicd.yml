@@ -322,9 +322,16 @@ jobs:
             mkdir -p "$RELEASE"
             tar -xzf "/tmp/build_qa_${DEPLOY_ID}.tar.gz" -C "$RELEASE"
 
+            # Crear subdirectorios de storage si no existen
+            mkdir -p "$RELEASE/storage/framework/sessions"
+            mkdir -p "$RELEASE/storage/framework/views"
+            mkdir -p "$RELEASE/storage/framework/cache"
+            mkdir -p "$RELEASE/storage/logs"
+            mkdir -p "$RELEASE/storage/app/public"
+
             # Permisos para storage y bootstrap/cache
-            chmod -R 775 "$RELEASE/storage" 2>/dev/null || true
-            chmod -R 775 "$RELEASE/bootstrap/cache" 2>/dev/null || true
+            chmod -R 775 "$RELEASE/storage"
+            chmod -R 775 "$RELEASE/bootstrap/cache"
 
             # Activar release con symlink atomico
             ln -sfn "$RELEASE" "$CURRENT"
