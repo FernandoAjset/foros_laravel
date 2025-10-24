@@ -240,12 +240,6 @@ jobs:
           sed -i "s|^DB_PASSWORD=.*|DB_PASSWORD=${{ secrets.QA_DB_PASSWORD }}|g" .env
           php artisan key:generate --force --ansi
 
-      - name: Cacheos de framework
-        run: |
-          php artisan config:cache
-          php artisan route:cache
-          php artisan view:cache
-
       - name: Empaquetar artifact con ID único
         run: |
           tar -czf /tmp/build_qa_${DEPLOY_ID}.tar.gz \
@@ -321,12 +315,13 @@ jobs:
             # Activar release con symlink atomico
             ln -sfn "$RELEASE" "$CURRENT"
 
-            # Migraciones y caches sobre la versión activa
+            # Migraciones y optimizaciones sobre la versión activa
             cd "$CURRENT"
-            php artisan migrate --force || true
+            php artisan migrate --force
             php artisan config:cache
             php artisan route:cache
             php artisan view:cache
+            php artisan optimize
 
             # Mantener solo los últimos 3 releases y eliminar el resto
             KEEP=3
