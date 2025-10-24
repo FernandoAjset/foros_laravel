@@ -235,7 +235,6 @@ jobs:
     name: Build (Composer+Vite)
     runs-on: ubuntu-latest
     needs: [ meta, scan ]
-    # Build only on: push to qa, manual trigger, or approved PR
     if: |
       github.event_name == 'push' ||
       github.event_name == 'workflow_dispatch' ||
@@ -279,15 +278,8 @@ jobs:
           sed -i "s|^DB_PASSWORD=.*|DB_PASSWORD=${{ secrets.QA_DB_PASSWORD }}|g" .env
           php artisan key:generate --force --ansi
 
-      - name: Verificar archivos antes de empaquetar
-        run: |
-          echo "=== Archivos en el directorio actual ==="
-          ls -la
-          echo "=== Verificando directorios importantes ==="
-          test -d app && echo "✓ app existe" || echo "✗ app NO existe"
-          test -f artisan && echo "✓ artisan existe" || echo "✗ artisan NO existe"
-          test -d vendor && echo "✓ vendor existe" || echo "✗ vendor NO existe"
-          test -d public && echo "✓ public existe" || echo "✗ public NO existe"
+      - name: Optimizar autoload
+        run: php artisan optimize:clear
 
       - name: Empaquetar artifact con ID único
         run: |
@@ -298,10 +290,6 @@ jobs:
             --exclude='tests' \
             .
           mv /tmp/build_qa_${DEPLOY_ID}.tar.gz .
-          echo "=== Tamaño del archivo ==="
-          ls -lh build_qa_${DEPLOY_ID}.tar.gz
-          echo "=== Primeras 30 líneas del contenido ==="
-          tar -tzf build_qa_${DEPLOY_ID}.tar.gz | head -30 || true
 
       - name: Subir artifact
         uses: actions/upload-artifact@v4
@@ -318,7 +306,6 @@ jobs:
     name: Deploy to QA
     runs-on: ubuntu-latest
     needs: [ meta, build ]
-    # Deploy only on: push to qa or manual trigger
     if: |
       github.event_name == 'push' ||
       github.event_name == 'workflow_dispatch'
@@ -344,11 +331,12 @@ jobs:
         uses: appleboy/ssh-action@v1.2.0
         env:
           DEPLOY_ID: ${{ env.DEPLOY_ID }}
+          SSH_USER: ${{ secrets.QA_SSH_USER }}
         with:
           host: ${{ secrets.QA_HOST }}
           username: ${{ secrets.QA_SSH_USER }}
           password: ${{ secrets.QA_SSH_PASSWORD }}
-          envs: DEPLOY_ID
+          envs: DEPLOY_ID,SSH_USER
           script: |
             set -e
             BASE="/var/www/laravel-app"
@@ -368,7 +356,11 @@ jobs:
             mkdir -p "$RELEASE/storage/logs"
             mkdir -p "$RELEASE/storage/app/public"
 
+            # Crear archivo de log si no existe
+            touch "$RELEASE/storage/logs/laravel.log"
+
             # Permisos para storage y bootstrap/cache
+            chown -R ${SSH_USER}:www-data "$RELEASE/storage" "$RELEASE/bootstrap/cache"
             chmod -R 775 "$RELEASE/storage"
             chmod -R 775 "$RELEASE/bootstrap/cache"
 
@@ -377,12 +369,21 @@ jobs:
 
             # Migraciones y optimizaciones sobre la versión activa
             cd "$CURRENT"
+
+            # Limpiar todos los caches antiguos
+            php artisan config:clear
+            php artisan cache:clear
+            php artisan route:clear
+            php artisan view:clear
+
+            # Ejecutar migraciones y seeders
             php artisan migrate --force
             php artisan db:seed --force
+
+            # Generar nuevos caches
             php artisan config:cache
             php artisan route:cache
             php artisan view:cache
-            php artisan optimize
 
             # Mantener solo los últimos 3 releases y eliminar el resto
             KEEP=3
