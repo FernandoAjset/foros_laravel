@@ -142,7 +142,7 @@ jobs:
   scan:
     name: Security Scan (Trivy + SARIF)
     runs-on: ubuntu-latest
-    needs: test
+    needs: [ meta, test ]
     env:
       DEPLOY_ID: ${{ needs.meta.outputs.deploy_id }}
     steps:
@@ -174,15 +174,42 @@ jobs:
           name: trivy-report_${{ env.DEPLOY_ID }}
           path: trivy-results_${{ env.DEPLOY_ID }}.sarif
 
+      - name: OWASP Dependency-Check scan
+        uses: dependency-check/Dependency-Check_Action@main
+        with:
+          project: 'foros-laravel-qa'
+          path: '.'
+          format: 'HTML'
+          args: >
+            --enableRetired
+            --disableYarnAudit
+
+      - name: Upload OWASP Dependency-Check report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: owasp-dc-report_${{ env.DEPLOY_ID }}
+          path: reports/
+
+      - name: GitGuardian secret scan
+        uses: GitGuardian/ggshield-action@v1.32.0
+        env:
+          GITGUARDIAN_API_KEY: ${{ secrets.GITGUARDIAN_API_KEY }}
+        with:
+          args: secret scan path . --recursive --show-secrets
+
       - name: Job Summary
         if: always()
         run: |
-          echo "### Trivy Security Scan (${DEPLOY_ID})" >> $GITHUB_STEP_SUMMARY
+          echo "### Security Scan Results (${DEPLOY_ID})" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          echo "#### Trivy (Vulnerabilities + Secrets)" >> $GITHUB_STEP_SUMMARY
           if command -v jq >/dev/null 2>&1 && [ -f "trivy-results_${DEPLOY_ID}.sarif" ]; then
             issues=$(jq '.runs[].results | length' trivy-results_${DEPLOY_ID}.sarif 2>/dev/null || echo "0")
             echo "- Vulnerabilities found: ${issues}" >> $GITHUB_STEP_SUMMARY
             if [ "$issues" -gt 0 ]; then
-              echo "- Review report at: Security → Code Scanning" >> $GITHUB_STEP_SUMMARY
+              echo "- Review at: Security → Code Scanning" >> $GITHUB_STEP_SUMMARY
               echo "- Artifact: trivy-report_${DEPLOY_ID}" >> $GITHUB_STEP_SUMMARY
             else
               echo "- No critical vulnerabilities found" >> $GITHUB_STEP_SUMMARY
@@ -191,6 +218,15 @@ jobs:
             echo "- SARIF report generated" >> $GITHUB_STEP_SUMMARY
             echo "- Artifact: trivy-report_${DEPLOY_ID}" >> $GITHUB_STEP_SUMMARY
           fi
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "#### OWASP Dependency-Check" >> $GITHUB_STEP_SUMMARY
+          echo "- Detailed HTML report available in artifact: owasp-dc-report_${DEPLOY_ID}" >> $GITHUB_STEP_SUMMARY
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "#### GitGuardian (Secret Detection)" >> $GITHUB_STEP_SUMMARY
+          echo "- Secret scan completed" >> $GITHUB_STEP_SUMMARY
+          echo "- Check logs above for any exposed secrets" >> $GITHUB_STEP_SUMMARY
 
   build:
     name: Build (Composer+Vite)
