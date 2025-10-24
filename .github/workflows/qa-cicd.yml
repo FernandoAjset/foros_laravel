@@ -240,6 +240,16 @@ jobs:
           sed -i "s|^DB_PASSWORD=.*|DB_PASSWORD=${{ secrets.QA_DB_PASSWORD }}|g" .env
           php artisan key:generate --force --ansi
 
+      - name: Verificar archivos antes de empaquetar
+        run: |
+          echo "=== Archivos en el directorio actual ==="
+          ls -la
+          echo "=== Verificando directorios importantes ==="
+          test -d app && echo "✓ app existe" || echo "✗ app NO existe"
+          test -f artisan && echo "✓ artisan existe" || echo "✗ artisan NO existe"
+          test -d vendor && echo "✓ vendor existe" || echo "✗ vendor NO existe"
+          test -d public && echo "✓ public existe" || echo "✗ public NO existe"
+
       - name: Empaquetar artifact con ID único
         run: |
           tar -czf /tmp/build_qa_${DEPLOY_ID}.tar.gz \
@@ -249,6 +259,8 @@ jobs:
             --exclude='tests' \
             .
           mv /tmp/build_qa_${DEPLOY_ID}.tar.gz .
+          echo "=== Contenido del tar.gz ==="
+          tar -tzf build_qa_${DEPLOY_ID}.tar.gz | head -50
 
       - name: Subir artifact
         uses: actions/upload-artifact@v4
