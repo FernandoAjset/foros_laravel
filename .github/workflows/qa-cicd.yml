@@ -332,6 +332,7 @@ jobs:
             # Migraciones y optimizaciones sobre la versión activa
             cd "$CURRENT"
             php artisan migrate --force
+            php artisan db:seed --force
             php artisan config:cache
             php artisan route:cache
             php artisan view:cache

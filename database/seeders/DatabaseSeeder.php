@@ -12,13 +12,20 @@ class DatabaseSeeder extends Seeder
      */
     public function run(): void
     {
-        \App\Models\User::factory()->create( ['email'=> 'mikysama1234@gmail.com', "password"=>'Contraseña'] );
-        \App\Models\User::factory(10)->create();
+        // Solo ejecutar seeders si las tablas están vacías
+        if (\App\Models\User::count() === 0) {
+            \App\Models\User::factory()->create(['email' => 'mikysama1234@gmail.com', 'password' => 'Contraseña']);
+            \App\Models\User::factory(10)->create();
+        }
 
-        \App\Models\Category::factory(10)
-            ->hasThreads(10)
-            ->create();
+        if (\App\Models\Category::count() === 0) {
+            \App\Models\Category::factory(10)
+                ->hasThreads(10)
+                ->create();
+        }
 
-        \App\Models\Reply::factory(200)->create();
+        if (\App\Models\Reply::count() === 0) {
+            \App\Models\Reply::factory(200)->create();
+        }
     }
 }
