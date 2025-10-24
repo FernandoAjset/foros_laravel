@@ -304,21 +304,19 @@ jobs:
             BASE="/var/www/laravel-app"
             CURRENT="${BASE}/current"
             RELEASES="${BASE}/releases"
-            RELEASE="${RELEASES}/${DEPLOY_ID}"
+            RELEASE="${RELEASES}/${{ env.DEPLOY_ID }}"
 
-            # Prep directorios
-            sudo mkdir -p "$RELEASES"
+            # Crear directorios
+            mkdir -p "$RELEASES"
             mkdir -p "$RELEASE"
-            tar -xzf "/tmp/build_qa_${DEPLOY_ID}.tar.gz" -C "$RELEASE"
+            tar -xzf "/tmp/build_qa_${{ env.DEPLOY_ID }}.tar.gz" -C "$RELEASE"
 
-            # Permisos
-            sudo chown -R $USER:www-data "$RELEASE"
-            sudo find "$RELEASE/storage" -type d -exec chmod 775 {} \; 2>/dev/null || true
-            sudo find "$RELEASE/bootstrap/cache" -type d -exec chmod 775 {} \; 2>/dev/null || true
+            # Permisos para storage y bootstrap/cache
+            chmod -R 775 "$RELEASE/storage" 2>/dev/null || true
+            chmod -R 775 "$RELEASE/bootstrap/cache" 2>/dev/null || true
 
             # Activar release con symlink atomico
             ln -sfn "$RELEASE" "$CURRENT"
-            sudo chown -h $USER:www-data "$CURRENT"
 
             # Migraciones y caches sobre la versión activa
             cd "$CURRENT"
@@ -329,14 +327,13 @@ jobs:
 
             # Mantener solo los últimos 3 releases y eliminar el resto
             KEEP=3
-            COUNT=$(ls -1dt ${RELEASES}/* 2>/dev/null | wc -l || true)
+            COUNT=$(ls -1dt ${RELEASES}/* 2>/dev/null | wc -l)
             if [ "$COUNT" -gt "$KEEP" ]; then
-              TO_DELETE=$(ls -1dt ${RELEASES}/* | tail -n +$((KEEP+1)) )
-              echo "$TO_DELETE" | xargs -r rm -rf --
+              ls -1dt ${RELEASES}/* | tail -n +$((KEEP+1)) | xargs rm -rf
             fi
 
             # Limpieza de temporales
-            rm -f "/tmp/build_qa_${DEPLOY_ID}.tar.gz"
+            rm -f "/tmp/build_qa_${{ env.DEPLOY_ID }}.tar.gz"
 
       - name: Job Summary
         run: |
