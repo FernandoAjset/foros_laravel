@@ -60,6 +60,16 @@ jobs:
       - name: Install Composer deps (dev)
         run: composer install --no-interaction
 
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install Node dependencies and build assets
+        run: |
+          npm ci
+          npm run build
+
       - name: Prepare .env.testing
         run: |
           cp .env.example .env.testing
@@ -122,7 +132,7 @@ jobs:
           else
             echo "- No JUnit file generated" >> $GITHUB_STEP_SUMMARY
           fi
-          
+
           if [ -f "coverage.xml" ]; then
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "### Coverage Report" >> $GITHUB_STEP_SUMMARY
@@ -181,7 +191,7 @@ jobs:
     needs: [ scan ]
     # Solo hacer build cuando es push a qa o PR aprobado (no en cada PR)
     if: |
-      github.event_name == 'push' || 
+      github.event_name == 'push' ||
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'pull_request_review' && github.event.review.state == 'approved')
     env:
@@ -255,7 +265,7 @@ jobs:
     needs: build
     # Solo hacer deploy cuando es push a qa o workflow manual
     if: |
-      github.event_name == 'push' || 
+      github.event_name == 'push' ||
       github.event_name == 'workflow_dispatch'
     env:
       DEPLOY_ID: ${{ needs.meta.outputs.deploy_id }}
