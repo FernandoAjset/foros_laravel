@@ -7,9 +7,12 @@
 /storage/pail
 /vendor
 /coverage-report
+coverage.xml
+phpunit-junit_*.xml
 .env
 .env.backup
 .env.production
+.env.testing
 .phpactor.json
 .phpunit.result.cache
 Homestead.json

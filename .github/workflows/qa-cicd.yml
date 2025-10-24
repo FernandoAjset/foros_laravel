@@ -3,6 +3,11 @@ name: CI-CD QA
 on:
   push:
     branches: [ "qa" ]
+  pull_request:
+    branches: [ "qa" ]
+    types: [ opened, synchronize, reopened ]
+  pull_request_review:
+    types: [ submitted ]
   workflow_dispatch:
 
 env:
@@ -48,7 +53,7 @@ jobs:
         uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ env.PHP_VERSION }}
-          coverage: none
+          coverage: xdebug
           extensions: mbstring, intl, bcmath, mysql, zip, dom, curl, pcntl
           ini-values: post_max_size=64M, upload_max_filesize=32M, memory_limit=512M
 
@@ -68,14 +73,37 @@ jobs:
           cp .env.testing .env
           php artisan key:generate --env=testing --ansi
 
-      - name: Run PHPUnit (JUnit)
-        run: php artisan test --env=testing --log-junit phpunit-junit_${{ env.DEPLOY_ID }}.xml
+      - name: Run PHPUnit with Coverage
+        run: |
+          php artisan test --env=testing \
+            --log-junit phpunit-junit_${{ env.DEPLOY_ID }}.xml \
+            --coverage-html coverage-report \
+            --coverage-clover coverage.xml
 
       - name: Upload JUnit artifact
         uses: actions/upload-artifact@v4
         with:
           name: phpunit-junit_${{ env.DEPLOY_ID }}
           path: phpunit-junit_${{ env.DEPLOY_ID }}.xml
+
+      - name: Upload Coverage Report (HTML)
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report_${{ env.DEPLOY_ID }}
+          path: coverage-report/
+
+      - name: Upload Coverage (Clover)
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-clover_${{ env.DEPLOY_ID }}
+          path: coverage.xml
+
+      - name: Comment PR with Coverage
+        if: github.event_name == 'pull_request'
+        uses: orgoro/coverage@v3.1
+        with:
+          coverageFile: coverage.xml
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Job Summary
         if: always()
@@ -93,6 +121,12 @@ jobs:
             echo "- Skipped: ${SKIP}" >> $GITHUB_STEP_SUMMARY
           else
             echo "- No JUnit file generated" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          if [ -f "coverage.xml" ]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### Coverage Report" >> $GITHUB_STEP_SUMMARY
+            echo "📊 [View HTML Coverage Report](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})" >> $GITHUB_STEP_SUMMARY
           fi
 
   scan:
@@ -145,6 +179,11 @@ jobs:
     name: Build (Composer+Vite)
     runs-on: ubuntu-latest
     needs: [ scan ]
+    # Solo hacer build cuando es push a qa o PR aprobado (no en cada PR)
+    if: |
+      github.event_name == 'push' || 
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request_review' && github.event.review.state == 'approved')
     env:
       DEPLOY_ID: ${{ needs.meta.outputs.deploy_id }}
     steps:
@@ -214,6 +253,10 @@ jobs:
     name: Deploy to QA
     runs-on: ubuntu-latest
     needs: build
+    # Solo hacer deploy cuando es push a qa o workflow manual
+    if: |
+      github.event_name == 'push' || 
+      github.event_name == 'workflow_dispatch'
     env:
       DEPLOY_ID: ${{ needs.meta.outputs.deploy_id }}
     steps:
