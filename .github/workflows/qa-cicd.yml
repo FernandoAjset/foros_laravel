@@ -195,7 +195,7 @@ jobs:
   build:
     name: Build (Composer+Vite)
     runs-on: ubuntu-latest
-    needs: [ scan ]
+    needs: [ meta, scan ]
     # Build only on: push to qa, manual trigger, or approved PR
     if: |
       github.event_name == 'push' ||
@@ -259,8 +259,10 @@ jobs:
             --exclude='tests' \
             .
           mv /tmp/build_qa_${DEPLOY_ID}.tar.gz .
-          echo "=== Contenido del tar.gz ==="
-          tar -tzf build_qa_${DEPLOY_ID}.tar.gz | head -50
+          echo "=== Tamaño del archivo ==="
+          ls -lh build_qa_${DEPLOY_ID}.tar.gz
+          echo "=== Primeras 30 líneas del contenido ==="
+          tar -tzf build_qa_${DEPLOY_ID}.tar.gz | head -30 || true
 
       - name: Subir artifact
         uses: actions/upload-artifact@v4
