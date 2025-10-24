@@ -218,8 +218,8 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
 
-      - name: Composer install (prod)
-        run: composer install --no-dev --prefer-dist --optimize-autoloader --no-interaction
+      - name: Composer install (with dev for QA seeders)
+        run: composer install --prefer-dist --optimize-autoloader --no-interaction
 
       - name: Node build (Vite)
         run: |
@@ -229,7 +229,7 @@ jobs:
       - name: Construir .env desde secrets (QA)
         run: |
           cp .env.example .env
-          sed -i "s|^APP_ENV=.*|APP_ENV=production|g" .env
+          sed -i "s|^APP_ENV=.*|APP_ENV=staging|g" .env
           sed -i "s|^APP_DEBUG=.*|APP_DEBUG=false|g" .env
           sed -i "s|^APP_URL=.*|APP_URL=${{ secrets.QA_APP_URL }}|g" .env
           sed -i "s|^DB_CONNECTION=.*|DB_CONNECTION=${{ secrets.QA_DB_CONNECTION }}|g" .env
