@@ -295,21 +295,24 @@ jobs:
 
       - name: SSH deploy (releases, symlink, keep last 3)
         uses: appleboy/ssh-action@v1.2.0
+        env:
+          DEPLOY_ID: ${{ env.DEPLOY_ID }}
         with:
           host: ${{ secrets.QA_HOST }}
           username: ${{ secrets.QA_SSH_USER }}
           password: ${{ secrets.QA_SSH_PASSWORD }}
+          envs: DEPLOY_ID
           script: |
             set -e
             BASE="/var/www/laravel-app"
             CURRENT="${BASE}/current"
             RELEASES="${BASE}/releases"
-            RELEASE="${RELEASES}/${{ env.DEPLOY_ID }}"
+            RELEASE="${RELEASES}/${DEPLOY_ID}"
 
             # Crear directorios
             mkdir -p "$RELEASES"
             mkdir -p "$RELEASE"
-            tar -xzf "/tmp/build_qa_${{ env.DEPLOY_ID }}.tar.gz" -C "$RELEASE"
+            tar -xzf "/tmp/build_qa_${DEPLOY_ID}.tar.gz" -C "$RELEASE"
 
             # Permisos para storage y bootstrap/cache
             chmod -R 775 "$RELEASE/storage" 2>/dev/null || true
@@ -333,7 +336,7 @@ jobs:
             fi
 
             # Limpieza de temporales
-            rm -f "/tmp/build_qa_${{ env.DEPLOY_ID }}.tar.gz"
+            rm -f "/tmp/build_qa_${DEPLOY_ID}.tar.gz"
 
       - name: Job Summary
         run: |
