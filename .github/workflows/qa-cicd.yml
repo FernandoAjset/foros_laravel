@@ -278,7 +278,7 @@ jobs:
   deploy:
     name: Deploy to QA
     runs-on: ubuntu-latest
-    needs: build
+    needs: [ meta, build ]
     # Deploy only on: push to qa or manual trigger
     if: |
       github.event_name == 'push' ||
